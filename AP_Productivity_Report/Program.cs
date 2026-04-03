@@ -514,7 +514,8 @@ app.MapPost("/api/settings/workflow-mapping/{id}", async (int id, HttpRequest re
             WorkflowName = body.WorkflowName,
             FieldMappings = body.FieldMappings,
             SiteMgrQueueIds = body.SiteMgrQueueIds,
-            SeniorApprovalQueueIds = body.SeniorApprovalQueueIds
+            SeniorApprovalQueueIds = body.SeniorApprovalQueueIds,
+            ProcessorQueueIds = body.ProcessorQueueIds
         };
 
         var json = JsonSerializer.Serialize(settings, jsonOpts);
@@ -614,6 +615,9 @@ app.MapGet("/api/reports/ap-productivity", (HttpRequest request) =>
     var seniorQueueIds = mapping.SeniorApprovalQueueIds.Count > 0
         ? string.Join(",", mapping.SeniorApprovalQueueIds)
         : "-1";
+    var processorQueueIds = mapping.ProcessorQueueIds.Count > 0
+        ? string.Join(",", mapping.ProcessorQueueIds)
+        : null;
 
     try
     {
@@ -659,6 +663,7 @@ app.MapGet("/api/reports/ap-productivity", (HttpRequest request) =>
             WHERE inst.WorkItemID = wi.WorkItemID
               AND inst.Owner IS NOT NULL
               AND inst.Owner != 0
+              {(processorQueueIds != null ? $"AND inst.QueueID IN ({processorQueueIds})" : "")}
             ORDER BY inst.StartTime ASC
         ) proc_inst
         LEFT JOIN wf_Users proc_u ON proc_u.UserID = proc_inst.Owner
@@ -888,6 +893,7 @@ public class WorkflowMapping
     public Dictionary<string, string> FieldMappings { get; set; } = new();
     public List<int> SiteMgrQueueIds { get; set; } = new();
     public List<int> SeniorApprovalQueueIds { get; set; } = new();
+    public List<int> ProcessorQueueIds { get; set; } = new();
 }
 
 public class SaveSettingsConnectionInfo
@@ -919,6 +925,7 @@ public class SaveWorkflowMappingRequest
     public Dictionary<string, string> FieldMappings { get; set; } = new();
     public List<int> SiteMgrQueueIds { get; set; } = new();
     public List<int> SeniorApprovalQueueIds { get; set; } = new();
+    public List<int> ProcessorQueueIds { get; set; } = new();
 }
 
 public class SaveAuthSettingsRequest

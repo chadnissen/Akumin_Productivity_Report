@@ -703,6 +703,7 @@
 
             var savedSiteMgr = (saved && saved.siteMgrQueueIds) || [];
             var savedSenior = (saved && saved.seniorApprovalQueueIds) || [];
+            var savedProcessor = (saved && saved.processorQueueIds) || [];
 
             wfQueues.forEach(function(q) {
                 var tr = document.createElement('tr');
@@ -723,11 +724,14 @@
                 roleSelect.dataset.queueId = q.queueId;
                 roleSelect.innerHTML =
                     '<option value="none">-- Not used --</option>' +
+                    '<option value="processor">AP Processor</option>' +
                     '<option value="siteMgr">First Approval (Site Mgr)</option>' +
                     '<option value="senior">Second Approval (AP/Senior)</option>';
 
                 // Set saved value or auto-detect
-                if (savedSiteMgr.indexOf(q.queueId) >= 0) {
+                if (savedProcessor.indexOf(q.queueId) >= 0) {
+                    roleSelect.value = 'processor';
+                } else if (savedSiteMgr.indexOf(q.queueId) >= 0) {
                     roleSelect.value = 'siteMgr';
                 } else if (savedSenior.indexOf(q.queueId) >= 0) {
                     roleSelect.value = 'senior';
@@ -792,14 +796,16 @@
             // Collect queue roles
             var siteMgrQueueIds = [];
             var seniorApprovalQueueIds = [];
+            var processorQueueIds = [];
             document.querySelectorAll('.queue-role-select').forEach(function(sel) {
                 var qId = parseInt(sel.dataset.queueId);
-                if (sel.value === 'siteMgr') siteMgrQueueIds.push(qId);
+                if (sel.value === 'processor') processorQueueIds.push(qId);
+                else if (sel.value === 'siteMgr') siteMgrQueueIds.push(qId);
                 else if (sel.value === 'senior') seniorApprovalQueueIds.push(qId);
             });
 
-            if (siteMgrQueueIds.length === 0 && seniorApprovalQueueIds.length === 0) {
-                showToast('Please assign at least one queue to an approval role.', 'error');
+            if (siteMgrQueueIds.length === 0 && seniorApprovalQueueIds.length === 0 && processorQueueIds.length === 0) {
+                showToast('Please assign at least one queue to a role.', 'error');
                 return;
             }
 
@@ -815,6 +821,7 @@
                         workflowId: parseInt(wfId),
                         workflowName: wfName,
                         fieldMappings: fieldMappings,
+                        processorQueueIds: processorQueueIds,
                         siteMgrQueueIds: siteMgrQueueIds,
                         seniorApprovalQueueIds: seniorApprovalQueueIds
                     })
