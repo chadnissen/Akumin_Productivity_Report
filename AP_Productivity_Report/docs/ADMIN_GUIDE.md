@@ -118,10 +118,15 @@ Below the field mappings, each queue defined in the workflow is listed with a ro
 | Role | Meaning | Typical Queue Names |
 |---|---|---|
 | **Not used** | This queue is not relevant to the report | Data entry, scanning, exceptions |
-| **First Approval** | Site Manager or first-level approval step | "Site Manager Approval", "Manager Review" |
+| **AP Processor** | The AP clerk queue where final processing occurs before GP integration | "AP Clerk", "AP Approved", "Q40 Approved" |
+| **First Approval** | Manager or first-level review/assignment step | "Site Manager Approval", "Manager Review" |
 | **Second Approval** | Senior or AP-level approval step | "Senior Approval", "AP Approval" |
 
-The application auto-detects likely approval queues based on name patterns (such as names containing "APPROVAL" or "SENIOR"). Review the suggestions and correct any that do not match your workflow's structure.
+**AP Processor queue** is the most important role to configure. The report identifies the AP specialist responsible for each invoice by finding the last clerk who completed a step in this queue. For completed invoices this is the person who sent the invoice to GP integration. For in-progress invoices it is whoever currently holds the item in that queue. Only one queue typically needs this role.
+
+The **First Approval** and **Second Approval** roles are optional. If your workflow has only one manager-level queue, assign it to First Approval and leave Second Approval unset. If your workflow has no approval step distinct from clerk processing, both can be left as "Not used" — those columns will appear blank in the report.
+
+The application auto-detects likely approval queues based on name patterns (such as names containing "APPROVAL" or "SENIOR"). Review the suggestions and correct any that do not match your workflow's structure. Note that queues containing "APPROVED" or "40" in the name are intentionally excluded from auto-detection and must be assigned manually.
 
 ### Saving the Workflow Mapping
 
@@ -272,7 +277,8 @@ If you configured AD groups in Access Control and can no longer access the appli
 | Date range is too narrow | Select a wider date range preset such as "Year to Date" or enter a broader custom range |
 | Wrong date basis selected | Try switching the Date Basis filter (e.g., from "Invoice Date" to "System Created Date") |
 | Field mappings are incorrect | Go to Settings and verify that each field mapping points to the correct workflow field |
-| Queue roles are not assigned | At least one queue must be mapped to "First Approval" or "Second Approval" for approval data to appear |
+| AP Processor queue not configured | Go to Settings and assign the AP clerk queue the "AP Processor" role — without this the AP Processor column will be blank or inaccurate |
+| Queue roles are not assigned | At least one queue must be mapped to "First Approval" or "Second Approval" for approval timing data to appear |
 | The workflow has no work items | Confirm with your ECMT administrator that the workflow contains data |
 
 ### DPAPI Encryption Errors
@@ -299,6 +305,25 @@ Symptoms: The application fails to start, or connection tests fail immediately w
 2. Verify that the user's Windows account is a member of at least one of those groups.
 3. If no groups are configured, the application should allow all authenticated users. Check that Windows Authentication is enabled and Anonymous Authentication is disabled in IIS.
 4. AD group membership changes may require the user to log off and back on (or close and reopen their browser) for updated group tokens to take effect.
+
+### Report Query Times Out
+
+**Symptom:** "Execution Timeout Expired" error when running the report, especially on large date ranges.
+
+The main report query uses four correlated subqueries against `wf_WorkInstances_{id}` (one per work item, per approval step). On databases with a large work instances table, this can time out even on short date ranges.
+
+| Possible Cause | Resolution |
+|---|---|
+| Date range too wide | Narrow to a shorter range (e.g., last 30 days) as a temporary workaround |
+| Missing index on work instances table | Ask your DBA to add the index below — this is the permanent fix |
+| Database server under heavy load | Retry during off-peak hours; the query competes with ECMT workflow transactions |
+
+**Recommended index (ask your DBA):**
+```sql
+CREATE INDEX IX_WorkInstances_WorkItemID
+ON wf_WorkInstances_7 (WorkItemID, QueueID, StartTime, EndTime);
+```
+Replace `7` with your workflow ID. Without this index, SQL Server scans the entire work instances table for every row returned — with it, each lookup becomes a fast seek.
 
 ### Application Pool Crashes Repeatedly
 

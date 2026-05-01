@@ -264,7 +264,7 @@ Five cards showing aggregate metrics for the filtered results:
 
 | Column | Description |
 |--------|-------------|
-| AP Processor | The AP specialist assigned to the invoice (first workflow instance owner) |
+| AP Processor | The AP clerk who last processed the invoice in the configured AP processor queue — for completed invoices, this is the clerk who sent it to final integration; for in-progress invoices, this is the current holder |
 | Vendor Name | Vendor name from the invoice |
 | Invoice Date | Date on the invoice |
 | Invoice # | Invoice number |
@@ -410,6 +410,17 @@ Visit `/settings.html` (click the gear icon) and enter your database credentials
 
 ### Passwords lost after changing IIS Application Pool identity
 DPAPI encryption is tied to the Windows user account. If you change the app pool identity, revisit `/settings.html` and re-enter passwords.
+
+### Report query times out
+The main query uses four correlated subqueries against `wf_WorkInstances_{id}`. On databases with a large work instances table (millions of rows), queries can time out even on short date ranges.
+
+- **Short term:** Narrow the date range to a smaller window (e.g., last week instead of year to date)
+- **Permanent fix:** Ask your database administrator to add a covering index on the work instances table:
+  ```sql
+  CREATE INDEX IX_WorkInstances_WorkItemID
+  ON wf_WorkInstances_7 (WorkItemID, QueueID, StartTime, EndTime);
+  ```
+  Replace `7` with your workflow ID. This makes each correlated lookup a fast index seek instead of a table scan.
 
 ### No data returned
 - Verify the correct workflow is selected (or configured in settings)

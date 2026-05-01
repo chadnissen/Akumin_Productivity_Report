@@ -104,7 +104,7 @@ Each row in the table represents one invoice. Here is what each column means:
 
 | Column | Description |
 |--------|-------------|
-| **AP Processor** | The AP specialist assigned to the invoice |
+| **AP Processor** | The AP clerk who last processed the invoice in the AP clerk queue. For completed invoices, this is the clerk who finalized processing (sent it to GP integration). For in-progress invoices, this is who currently holds it in the queue. |
 | **Vendor Name** | The vendor or supplier on the invoice |
 | **Invoice Date** | The date printed on the invoice |
 | **Invoice #** | The invoice number |

@@ -911,13 +911,16 @@
                     return;
                 }
 
-                var html = '';
+                panel.innerHTML = '';
                 data.groups.forEach(function(g) {
-                    var desc = g.description ? '<div class="group-desc">' + g.description + '</div>' : '';
-                    html += '<div class="group-result-item" onclick="selectAdGroup(\'' + g.fullName.replace(/'/g, "\\'") + '\')">'
-                        + '<div class="group-name">' + g.fullName + '</div>' + desc + '</div>';
+                    var item = document.createElement('div');
+                    item.className = 'group-result-item';
+                    item.dataset.fullName = g.fullName;
+                    item.innerHTML = '<div class="group-name">' + g.fullName + '</div>'
+                        + (g.description ? '<div class="group-desc">' + g.description + '</div>' : '');
+                    item.addEventListener('click', function() { selectAdGroup(this.dataset.fullName); });
+                    panel.appendChild(item);
                 });
-                panel.innerHTML = html;
             } catch (e) {
                 panel.innerHTML = '<div class="group-result-msg">Search failed: ' + e.message + '</div>';
             }

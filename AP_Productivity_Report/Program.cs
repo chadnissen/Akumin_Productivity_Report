@@ -115,6 +115,12 @@ bool IsUserAuthorized(HttpContext ctx)
         foreach (var group in groups)
         {
             try { if (wp.IsInRole(group)) return true; } catch { }
+            // Fallback: try just the CN portion in case domain prefix is wrong (e.g. "AD\GroupName" → "GroupName")
+            if (group.Contains('\\'))
+            {
+                var cn = group.Substring(group.IndexOf('\\') + 1);
+                try { if (wp.IsInRole(cn)) return true; } catch { }
+            }
         }
     }
 
@@ -200,31 +206,46 @@ app.MapGet("/api/settings/auth/browse-groups", (HttpRequest request) =>
         var results = new List<object>();
         using var entry = new DirectoryEntry("LDAP://RootDSE");
         var defaultNamingContext = entry.Properties["defaultNamingContext"]?.Value?.ToString() ?? "";
+
+        // Get real NETBIOS domain name from AD Partitions container
+        var netbiosName = "";
+        try
+        {
+            using var partEntry = new DirectoryEntry($"LDAP://CN=Partitions,CN=Configuration,{defaultNamingContext}");
+            using var partSearcher = new DirectorySearcher(partEntry)
+            {
+                Filter = $"(&(objectClass=crossRef)(nCName={defaultNamingContext}))",
+                SizeLimit = 1
+            };
+            partSearcher.PropertiesToLoad.Add("nETBIOSName");
+            var partResult = partSearcher.FindOne();
+            netbiosName = partResult?.Properties["nETBIOSName"]?.Count > 0
+                ? partResult.Properties["nETBIOSName"][0]?.ToString() ?? ""
+                : "";
+        }
+        catch { }
+
         using var searchRoot = new DirectoryEntry($"LDAP://{defaultNamingContext}");
         using var searcher = new DirectorySearcher(searchRoot)
         {
-            Filter = $"(&(objectCategory=group)(cn=*{EscapeLdapFilter(search)}*))",
+            Filter = $"(&(objectCategory=group)(|(cn=*{EscapeLdapFilter(search)}*)(sAMAccountName=*{EscapeLdapFilter(search)}*)))",
             SizeLimit = 50,
             PageSize = 50
         };
-        searcher.PropertiesToLoad.AddRange(new[] { "cn", "distinguishedName", "description" });
+        searcher.PropertiesToLoad.AddRange(new[] { "cn", "sAMAccountName", "distinguishedName", "description" });
 
         using var searchResults = searcher.FindAll();
         foreach (SearchResult sr in searchResults)
         {
             var cn = sr.Properties["cn"]?.Count > 0 ? sr.Properties["cn"][0]?.ToString() ?? "" : "";
-            var dn = sr.Properties["distinguishedName"]?.Count > 0 ? sr.Properties["distinguishedName"][0]?.ToString() ?? "" : "";
+            var sam = sr.Properties["sAMAccountName"]?.Count > 0 ? sr.Properties["sAMAccountName"][0]?.ToString() ?? "" : "";
             var desc = sr.Properties["description"]?.Count > 0 ? sr.Properties["description"][0]?.ToString() ?? "" : "";
-
-            // Extract domain from DN (e.g., DC=ad,DC=contoso,DC=com → AD)
-            var domain = "";
-            var dcMatch = System.Text.RegularExpressions.Regex.Match(dn, @"DC=([^,]+)");
-            if (dcMatch.Success) domain = dcMatch.Groups[1].Value.ToUpper();
+            var groupName = !string.IsNullOrEmpty(sam) ? sam : cn;
 
             results.Add(new
             {
-                name = cn,
-                fullName = !string.IsNullOrEmpty(domain) ? $"{domain}\\{cn}" : cn,
+                name = groupName,
+                fullName = !string.IsNullOrEmpty(netbiosName) ? $"{netbiosName}\\{groupName}" : groupName,
                 description = desc
             });
         }
@@ -625,6 +646,25 @@ app.MapGet("/api/reports/ap-productivity", (HttpRequest request) =>
 
         var sqlParams = new List<SqlParameter>();
 
+        // Pre-filter wf_WorkItems in a subquery so SQL Server scans only the relevant rows
+        // before running the 4 OUTER APPLYs against wf_WorkInstances. A WHERE appended after
+        // the OUTER APPLYs relies on optimizer push-down which SQL Server often skips on
+        // complex correlated-subquery plans, causing full-table scans on large datasets.
+        var preParts = new List<string>();
+        {
+            string? preCol = dateBasis == "system" ? "StartTime"
+                : dateBasis == "invoice" && fInvDate != "NULL" ? fInvDate
+                : null;
+            if (preCol != null)
+            {
+                if (!string.IsNullOrEmpty(start)) preParts.Add($"{preCol} >= @start");
+                if (!string.IsNullOrEmpty(end))   preParts.Add($"{preCol} < DATEADD(day, 1, CAST(@end AS date))");
+            }
+        }
+        var wiFrom = preParts.Count > 0
+            ? $"(SELECT * FROM {wiTable} WITH (NOLOCK) WHERE {string.Join(" AND ", preParts)})"
+            : $"{wiTable} WITH (NOLOCK)";
+
         // Build the inner query (CTE) with dynamic columns
         var innerSql = $@"
         SELECT
@@ -655,22 +695,22 @@ app.MapGet("/api/reports/ap-productivity", (HttpRequest request) =>
 
             q.QueueName         AS CurrentQueue
 
-        FROM {wiTable} wi
+        FROM {wiFrom} wi
 
         OUTER APPLY (
             SELECT TOP 1 inst.Owner, inst.StartTime
-            FROM {winstTable} inst
+            FROM {winstTable} inst WITH (NOLOCK)
             WHERE inst.WorkItemID = wi.WorkItemID
               AND inst.Owner IS NOT NULL
               AND inst.Owner != 0
               {(processorQueueIds != null ? $"AND inst.QueueID IN ({processorQueueIds})" : "")}
-            ORDER BY inst.StartTime ASC
+            ORDER BY COALESCE(inst.EndTime, inst.StartTime) DESC
         ) proc_inst
         LEFT JOIN wf_Users proc_u ON proc_u.UserID = proc_inst.Owner
 
         OUTER APPLY (
             SELECT TOP 1 inst.Owner, inst.StartTime, inst.EndTime, inst.Note
-            FROM {winstTable} inst
+            FROM {winstTable} inst WITH (NOLOCK)
             WHERE inst.WorkItemID = wi.WorkItemID
               AND inst.QueueID IN ({siteMgrQueueIds})
             ORDER BY inst.StartTime DESC
@@ -679,7 +719,7 @@ app.MapGet("/api/reports/ap-productivity", (HttpRequest request) =>
 
         OUTER APPLY (
             SELECT TOP 1 inst.Owner, inst.StartTime, inst.EndTime, inst.Note
-            FROM {winstTable} inst
+            FROM {winstTable} inst WITH (NOLOCK)
             WHERE inst.WorkItemID = wi.WorkItemID
               AND inst.QueueID IN ({seniorQueueIds})
             ORDER BY inst.StartTime DESC
@@ -688,7 +728,7 @@ app.MapGet("/api/reports/ap-productivity", (HttpRequest request) =>
 
         OUTER APPLY (
             SELECT TOP 1 inst.QueueID
-            FROM {winstTable} inst
+            FROM {winstTable} inst WITH (NOLOCK)
             WHERE inst.WorkItemID = wi.WorkItemID
             ORDER BY inst.StartTime DESC
         ) latest_inst
@@ -728,7 +768,7 @@ app.MapGet("/api/reports/ap-productivity", (HttpRequest request) =>
         {whereSql}
         ORDER BY r.SystemEntryDate DESC";
 
-        using var cmd = new SqlCommand(sql, conn);
+        using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 300 };
         foreach (var p in sqlParams)
             cmd.Parameters.Add(p);
 
